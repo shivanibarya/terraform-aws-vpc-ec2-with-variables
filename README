@@ -1,0 +1,315 @@
+         Project Name - terraform-aws-vpc-ec2-with-variables
+COMPLETE STEP-BY-STEP TERRAFORM DOCUMENTATION (VPC + EC2)
+ Project Goal
+Create AWS Infrastructure using Terraform:
+•	VPC
+•	Public Subnet
+•	Private Subnet
+•	Internet Gateway
+•	Route Tables
+•	Security Group
+•	EC2 Instance (Free Tier)
+•	Variables (string, number, bool, list, tuple, map, object, any)
+•	Dynamic Tags
+Region: us-west-1
+________________________________________
+ STEP 1: Launch EC2 (Terraform Server)
+1.	Go to AWS Console
+2.	Open EC2 → Launch Instance
+3.	Select:
+o	AMI: Amazon Linux 2
+o	Instance Type: t3.micro (Free Tier)
+4.	Create Key Pair
+5.	Allow SSH (Port 22)
+6.	Launch Instance
+7.	Connect via SSH:
+ssh -i key.pem ec2-user@your-public-ip
+________________________________________
+ STEP 2: Install Terraform on EC2
+Run these commands:
+sudo yum update -y
+sudo yum install -y yum-utils
+sudo yum-config-manager --add-repo https://rpm.releases.hashicorp.com/AmazonLinux/hashicorp.repo
+sudo yum -y install terraform
+Check version:
+terraform -v
+________________________________________
+STEP 3: Create Project Folder
+mkdir terraform-project
+cd terraform-project
+________________________________________
+ STEP 4: Create Required Files (Best Practice Structure)
+Create files:
+touch provider.tf
+touch variables.tf
+touch vpc.tf
+touch ec2.tf
+Project structure:
+terraform-project/
+│
+├── provider.tf
+├── variables.tf
+├── vpc.tf
+└── ec2.tf
+________________________________________
+ STEP 5: Provider Configuration (provider.tf)
+provider "aws" {
+  region = "us-west-1"
+}
+ ________________________________________
+STEP 6: Variables File (variables.tf)
+Includes all types: string, number, bool, list, tuple, map, object, any + tags
+variable "aws_region" {
+  type    = string
+  default = "us-west-1"
+}
+
+variable "vpc_name" {
+  type    = string
+  default = "vpc-1"
+}
+
+variable "ssh_port" {
+  type    = number
+  default = 22
+}
+
+variable "associate_public_ip" {
+  type    = bool
+  default = true
+}
+
+variable "private_subnet_cidr" {
+  type    = list(string)
+  default = ["10.0.4.0/23"]
+}
+
+variable "instance_config" {
+  type    = tuple([string, string])
+  default = ["us-west-1a", "t3.micro"]
+}
+
+variable "common_tags" {
+  type = map(string)
+  default = {
+    Owner   = "Shivani"
+    Project = "Terraform-VPC-EC2"
+    Env     = "Dev"
+  }
+}
+
+variable "ec2_config" {
+  type = object({
+    ami           = string
+    instance_type = string
+    name          = string
+  })
+
+  default = {
+    ami           = "ami-0d53d72369335a9d6"
+    instance_type = "t3.micro"
+    name          = "shivani-inst"
+  }
+}
+
+variable "tags" {
+  description = "Custom tag list"
+  type        = any
+  default     = ["shivani-resource", "Shivani", "Dev"]
+}
+ 
+
+ 
+________________________________________
+ STEP 7: VPC Infrastructure (vpc.tf)
+resource "aws_vpc" "my_vpc" {
+  cidr_block = "10.0.0.0/21"
+
+  tags = {
+    Name  = var.vpc_name
+    Env   = var.tags[2]
+    Owner = var.tags[1]
+  }
+}
+
+resource "aws_subnet" "pub_sub" {
+  vpc_id            = aws_vpc.my_vpc.id
+  cidr_block        = "10.0.0.0/22"
+  availability_zone = var.instance_config[0]
+
+  tags = {
+    Name  = "${var.tags[0]}-public"
+    Env   = var.tags[2]
+    Owner = var.tags[1]
+  }
+}
+
+resource "aws_subnet" "pri_sub" {
+  vpc_id            = aws_vpc.my_vpc.id
+  cidr_block        = var.private_subnet_cidr[0]
+  availability_zone = "us-west-1c"
+
+  tags = {
+    Name  = "${var.tags[0]}-private"
+    Env   = var.tags[2]
+    Owner = var.tags[1]
+  }
+}
+
+resource "aws_internet_gateway" "my_igw" {
+  vpc_id = aws_vpc.my_vpc.id
+
+  tags = {
+    Name  = "${var.tags[0]}-igw"
+    Env   = var.tags[2]
+    Owner = var.tags[1]
+  }
+}
+
+resource "aws_route_table" "my_rt" {
+  vpc_id = aws_vpc.my_vpc.id
+
+  tags = {
+    Name  = "${var.tags[0]}-private-rt"
+    Env   = var.tags[2]
+    Owner = var.tags[1]
+  }
+}
+
+resource "aws_route_table_association" "my_prta" {
+  route_table_id = aws_route_table.my_rt.id
+  subnet_id      = aws_subnet.pri_sub.id
+}
+
+resource "aws_route_table" "my_pubrt" {
+  vpc_id = aws_vpc.my_vpc.id
+
+  tags = {
+    Name  = "${var.tags[0]}-public-rt"
+    Env   = var.tags[2]
+    Owner = var.tags[1]
+  }
+}
+
+resource "aws_route" "public_route" {
+  route_table_id         = aws_route_table.my_pubrt.id
+  destination_cidr_block = "0.0.0.0/0"
+  gateway_id             = aws_internet_gateway.my_igw.id
+}
+
+resource "aws_route_table_association" "my_pubrta" {
+  route_table_id = aws_route_table.my_pubrt.id
+  subnet_id      = aws_subnet.pub_sub.id
+}
+
+resource "aws_security_group" "my_sg" {
+  name        = "my_sg_1"
+  description = "allow ssh access"
+  vpc_id      = aws_vpc.my_vpc.id
+
+  ingress {
+    from_port   = var.ssh_port
+    to_port     = var.ssh_port
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name  = "${var.tags[0]}-sg"
+    Env   = var.tags[2]
+    Owner = var.tags[1]
+  }
+}
+ 
+ 
+
+________________________________________
+ STEP 8: EC2 Instance (ec2.tf)
+resource "aws_instance" "inst_1" {
+  ami                         = "ami-0d53d72369335a9d6"
+  instance_type               = "t3.micro"   
+  subnet_id                   = aws_subnet.pub_sub.id
+  vpc_security_group_ids      = [aws_security_group.my_sg.id]
+  associate_public_ip_address = true
+
+  tags = {
+    Name = "shivani-inst"
+  }
+}
+ 
+________________________________________
+ STEP 9: Initialize Terraform
+terraform init
+ 
+This downloads AWS provider plugins.
+________________________________________
+ STEP 10: Validate Configuration
+terraform validate
+
+ 
+Checks syntax errors (bool, duplicate resource, etc.)
+________________________________________
+STEP 11: Preview Infrastructure
+terraform plan
+Shows what resources will be created:
+•	VPC
+•	Subnets
+•	IGW
+•	Route Tables
+•	Security Group
+•	EC2
+ 
+________________________________________
+ STEP 12: Deploy Infrastructure
+terraform apply
+Type:
+Yes
+ 
+Now AWS resources will be created.
+________________________________________
+ STEP 13: Verify Resources
+Check state:
+terraform state list
+Expected output:
+aws_instance.inst_1
+aws_internet_gateway.my_igw
+aws_route.public_route
+aws_route_table.my_pubrt
+aws_route_table.my_rt
+aws_route_table_association.my_prta
+aws_route_table_association.my_pubrta
+aws_security_group.my_sg
+aws_subnet.pri_sub
+aws_subnet.pub_sub
+aws_vpc.my_vpc
+ 
+________________________________________
+ STEP 14: Check in AWS Console
+Go to:
+1.	AWS Console → VPC → Your VPC
+ 
+2.	Subnets section
+ 
+
+ 
+3.	Route tables - shivani-resource-private-rt
+ 
+shivani-resource-public-rt
+
+ 
+4. Internet gateways - shivani-resource-igw
+ 
+4.	Security Groups 
+ 
+5.	EC2 → Instances
+Region must be us-west-1 (very important)
+ 
+
+
